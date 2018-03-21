@@ -3,10 +3,12 @@ package org.thoughtcrime.securesms.components;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.support.annotation.NonNull;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.Pair;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -19,12 +21,15 @@ import com.bumptech.glide.request.RequestOptions;
 import org.thoughtcrime.securesms.R;
 import org.thoughtcrime.securesms.database.AttachmentDatabase;
 import org.thoughtcrime.securesms.mms.DecryptableStreamUriLoader.DecryptableUri;
+import org.thoughtcrime.securesms.mms.GlideRequest;
 import org.thoughtcrime.securesms.mms.GlideRequests;
 import org.thoughtcrime.securesms.mms.Slide;
 import org.thoughtcrime.securesms.mms.SlideClickListener;
 import org.thoughtcrime.securesms.util.Util;
 import org.thoughtcrime.securesms.util.ViewUtil;
 import org.whispersystems.libsignal.util.guava.Optional;
+
+import java.util.Locale;
 
 import static com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions.withCrossFade;
 
@@ -37,6 +42,9 @@ public class ThumbnailView extends FrameLayout {
   private int             backgroundColorHint;
   private int             radius;
   private OnClickListener parentClickListener;
+
+  private final int[] dimens = new int[2];
+  private final int[] bounds = new int[4];
 
   private Optional<TransferControlView> transferControls       = Optional.absent();
   private SlideClickListener            thumbnailClickListener = null;
@@ -63,9 +71,105 @@ public class ThumbnailView extends FrameLayout {
 
     if (attrs != null) {
       TypedArray typedArray = context.getTheme().obtainStyledAttributes(attrs, R.styleable.ThumbnailView, 0, 0);
-      backgroundColorHint = typedArray.getColor(R.styleable.ThumbnailView_backgroundColorHint, Color.BLACK);
+      backgroundColorHint   = typedArray.getColor(R.styleable.ThumbnailView_backgroundColorHint, Color.BLACK);
+      bounds[0]             = typedArray.getDimensionPixelSize(R.styleable.ThumbnailView_minWidth, 0);
+      bounds[1]             = typedArray.getDimensionPixelSize(R.styleable.ThumbnailView_maxWidth, 0);
+      bounds[2]             = typedArray.getDimensionPixelSize(R.styleable.ThumbnailView_minHeight, 0);
+      bounds[3]             = typedArray.getDimensionPixelSize(R.styleable.ThumbnailView_maxHeight, 0);
       typedArray.recycle();
     }
+  }
+
+  @Override
+  protected void onMeasure(int originalWidthMeasureSpec, int originalHeightMeasureSpec) {
+    Log.e("SPIDERMAN", String.format(Locale.ENGLISH, "dimens: %d x %d   bounds: [ %d, %d, %d, %d ]", dimens[0], dimens[1], bounds[0], bounds[1], bounds[2], bounds[2], bounds[3]));
+
+    Pair<Integer, Integer> targetDimens = getTargetDimensions(dimens, bounds);
+    if (targetDimens.first == 0 && targetDimens.second == 0) {
+      super.onMeasure(originalWidthMeasureSpec, originalHeightMeasureSpec);
+      return;
+    }
+
+    int minWidth  = bounds[0];
+    int minHeight = bounds[2];
+
+    int finalWidth  = Math.max(targetDimens.first, minWidth) + getPaddingLeft() + getPaddingRight();
+    int finalHeight = Math.max(targetDimens.second, minHeight) + getPaddingTop() + getPaddingBottom();
+
+    int newWidthMeasureSpec  = MeasureSpec.makeMeasureSpec(finalWidth, MeasureSpec.getMode(originalWidthMeasureSpec));
+    int newHeightMeasureSpec = MeasureSpec.makeMeasureSpec(finalHeight, MeasureSpec.getMode(originalHeightMeasureSpec));
+
+    super.onMeasure(newWidthMeasureSpec, newHeightMeasureSpec);
+  }
+
+  @SuppressWarnings("SuspiciousNameCombination")
+  private Pair<Integer, Integer> getTargetDimensions(int[] dimens, int[] bounds) {
+    int dimensFilledCount = getNonZeroCount(dimens);
+    int boundsFilledCount = getNonZeroCount(bounds);
+
+    if (dimensFilledCount == 0 || boundsFilledCount == 0) {
+      return new Pair<>(0, 0);
+    }
+
+    double naturalWidth  = dimens[0];
+    double naturalHeight = dimens[1];
+
+    int minWidth  = bounds[0];
+    int maxWidth  = bounds[1];
+    int minHeight = bounds[2];
+    int maxHeight = bounds[3];
+
+    if (dimensFilledCount > 0 && dimensFilledCount < dimens.length) {
+      throw new IllegalStateException(String.format(Locale.ENGLISH, "Width or height has been specified, but not both. Dimens: %d x %d",
+          naturalWidth, naturalHeight));
+    }
+    if (boundsFilledCount > 0 && boundsFilledCount < bounds.length) {
+      throw new IllegalStateException(String.format(Locale.ENGLISH, "One or more min/max dimensions have been specified, but not all. Bounds: [%d, %d, %d, %d]",
+          minWidth, maxWidth, minHeight, maxHeight));
+    }
+
+    double measuredWidth  = naturalWidth;
+    double measuredHeight = naturalHeight;
+
+    boolean widthInBounds  = measuredWidth >= minWidth && measuredWidth <= maxWidth;
+    boolean heightInBounds = measuredHeight >= minHeight && measuredHeight <= maxHeight;
+
+    if (!widthInBounds || !heightInBounds) {
+      double minWidthRatio  = naturalWidth / minWidth;
+      double maxWidthRatio  = naturalWidth / maxWidth;
+      double minHeightRatio = naturalHeight / minHeight;
+      double maxHeightRatio = naturalHeight / maxHeight;
+
+      if (maxWidthRatio > 1 || maxHeightRatio > 1) {
+        if (maxWidthRatio >= maxHeightRatio) {
+          measuredWidth  /= maxWidthRatio;
+          measuredHeight /= maxWidthRatio;
+        } else {
+          measuredWidth  /= maxHeightRatio;
+          measuredHeight /= maxHeightRatio;
+        }
+      } else if (minWidthRatio < 1 || minHeightRatio < 1) {
+        if (minWidthRatio <= minHeightRatio) {
+          measuredWidth  /= minWidthRatio;
+          measuredHeight /= minWidthRatio;
+        } else {
+          measuredWidth  /= minHeightRatio;
+          measuredHeight /= minHeightRatio;
+        }
+      }
+    }
+
+    return new Pair<>((int) measuredWidth, (int) measuredHeight);
+  }
+
+  private int getNonZeroCount(int[] vals) {
+    int count = 0;
+    for (int val : vals) {
+      if (val > 0) {
+        count++;
+      }
+    }
+    return count;
   }
 
   @Override
@@ -97,8 +201,17 @@ public class ThumbnailView extends FrameLayout {
   }
 
   public void setImageResource(@NonNull GlideRequests glideRequests, @NonNull Slide slide,
-                               boolean showControls, boolean isPreview)
+                               boolean showControls, boolean isPreview) {
+    setImageResource(glideRequests, slide, showControls, isPreview, 0, 0);
+  }
+
+  public void setImageResource(@NonNull GlideRequests glideRequests, @NonNull Slide slide,
+                               boolean showControls, boolean isPreview, int naturalWidth,
+                               int naturalHeight)
   {
+    dimens[0] = naturalWidth;
+    dimens[1] = naturalHeight;
+
     if (showControls) {
       getTransferControls().setSlide(slide);
       getTransferControls().setDownloadClickListener(new DownloadClickDispatcher());
@@ -136,17 +249,24 @@ public class ThumbnailView extends FrameLayout {
     if      (slide.getThumbnailUri() != null) buildThumbnailGlideRequest(glideRequests, slide).into(image);
     else if (slide.hasPlaceholder())          buildPlaceholderGlideRequest(glideRequests, slide).into(image);
     else                                      glideRequests.clear(image);
+
   }
 
   public void setImageResource(@NonNull GlideRequests glideRequests, @NonNull Uri uri) {
+    // TODO: REMOVE
     if (transferControls.isPresent()) getTransferControls().setVisibility(View.GONE);
-
-    glideRequests.load(new DecryptableUri(uri))
+    GlideRequest request = glideRequests.load(new DecryptableUri(uri))
                  .diskCacheStrategy(DiskCacheStrategy.RESOURCE)
                  .transform(new RoundedCorners(radius))
-                 .transition(withCrossFade())
-                 .centerCrop()
-                 .into(image);
+                 .transition(withCrossFade());
+
+    Pair<Integer, Integer> targetDimens = getTargetDimensions(dimens, bounds);
+    if (targetDimens.first == 0 && targetDimens.second == 0) {
+      request = request.centerCrop();
+    } else {
+      request = request.override(targetDimens.first, targetDimens.second);
+    }
+    request.into(image);
   }
 
   public void setThumbnailClickListener(SlideClickListener listener) {
@@ -171,13 +291,18 @@ public class ThumbnailView extends FrameLayout {
     getTransferControls().showProgressSpinner();
   }
 
-  private RequestBuilder buildThumbnailGlideRequest(@NonNull GlideRequests glideRequests, @NonNull Slide slide) {
-    RequestBuilder builder = glideRequests.load(new DecryptableUri(slide.getThumbnailUri()))
+  private GlideRequest buildThumbnailGlideRequest(@NonNull GlideRequests glideRequests, @NonNull Slide slide) {
+    GlideRequest builder = glideRequests.load(new DecryptableUri(slide.getThumbnailUri()))
                                           .diskCacheStrategy(DiskCacheStrategy.RESOURCE)
                                           .transform(new RoundedCorners(radius))
-                                          .centerCrop()
                                           .transition(withCrossFade());
 
+    Pair<Integer, Integer> targetDimens = getTargetDimensions(dimens, bounds);
+    if (targetDimens.first == 0 && targetDimens.second == 0) {
+      builder = builder.centerCrop();
+    } else {
+      builder = builder.override(targetDimens.first, targetDimens.second);
+    }
     if (slide.isInProgress()) return builder;
     else                      return builder.apply(RequestOptions.errorOf(R.drawable.ic_missing_thumbnail_picture));
   }

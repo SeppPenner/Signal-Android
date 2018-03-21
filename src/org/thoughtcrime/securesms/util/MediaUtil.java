@@ -3,11 +3,13 @@ package org.thoughtcrime.securesms.util;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
 import android.net.Uri;
 import android.provider.MediaStore;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.WorkerThread;
+import android.support.media.ExifInterface;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
@@ -29,6 +31,7 @@ import org.thoughtcrime.securesms.mms.Slide;
 import org.thoughtcrime.securesms.mms.VideoSlide;
 import org.thoughtcrime.securesms.providers.PersistentBlobProvider;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
@@ -114,7 +117,7 @@ public class MediaUtil {
       return new Pair<>(0, 0);
     }
 
-    Pair<Integer, Integer> dimens = new Pair<>(0, 0);
+    Pair<Integer, Integer> dimens = null;
 
     if (MediaUtil.isGif(contentType)) {
       try {
@@ -132,13 +135,34 @@ public class MediaUtil {
         Log.w(TAG, "Glide experienced an exception while trying to get GIF dimensions.", e);
       }
     } else {
-      try (InputStream attachmentStream = context.getContentResolver().openInputStream(uri)) {
-        dimens = BitmapUtil.getDimensions(attachmentStream);
+      InputStream attachmentStream = null;
+      try {
+        if (MediaUtil.isJpegType(contentType)) {
+          attachmentStream = context.getContentResolver().openInputStream(uri);
+          dimens = BitmapUtil.getExifDimensions(attachmentStream);
+        }
+        if (dimens == null) {
+          attachmentStream = context.getContentResolver().openInputStream(uri);
+          dimens = BitmapUtil.getDimensions(attachmentStream);
+        }
+      } catch (FileNotFoundException e) {
+        e.printStackTrace();
       } catch (IOException e) {
-        Log.w(TAG, "Unable to read image to determine dimensions.", e);
+        e.printStackTrace();
       } catch (BitmapDecodingException e) {
-        Log.w(TAG, "Failed to decode image to determine dimensions.", e);
+        e.printStackTrace();
+      } finally {
+        if (attachmentStream != null) {
+          try {
+            attachmentStream.close();
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+        }
       }
+    }
+    if (dimens == null) {
+      dimens = new Pair<>(0, 0);
     }
     Log.d(TAG, "Dimensions for [" + uri + "] are " + dimens.first + " x " + dimens.second);
     return dimens;
